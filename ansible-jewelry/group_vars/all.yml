@@ -1,0 +1,12 @@
+---
+project_dir: /home/ubuntu/jewelry
+project_branch: main
+
+frontend_container: trangsuc-frontend
+backend_container: trangsuc-backend
+
+frontend_local_url: http://127.0.0.1:3002
+backend_local_url: http://127.0.0.1:8002
+public_url: https://dcjewelry.duckdns.org
+
+run_migrations: true

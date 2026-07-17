@@ -1,0 +1,165 @@
+---
+- name: Deploy Duc Chinh Jewelry
+  hosts: jewelry_servers
+  become: false
+  gather_facts: false
+
+  tasks:
+    - name: Check project directory
+      ansible.builtin.stat:
+        path: "{{ project_dir }}"
+      register: project_directory
+
+    - name: Stop deployment if project directory does not exist
+      ansible.builtin.fail:
+        msg: "Project directory {{ project_dir }} does not exist."
+      when: not project_directory.stat.exists
+
+    - name: Get current Git commit
+      ansible.builtin.command:
+        cmd: git rev-parse HEAD
+        chdir: "{{ project_dir }}"
+      register: old_commit
+      changed_when: false
+
+    - name: Fetch latest source code
+      ansible.builtin.command:
+        cmd: git fetch origin "{{ project_branch }}"
+        chdir: "{{ project_dir }}"
+      changed_when: false
+      environment:
+        GIT_TERMINAL_PROMPT: "0"
+
+    - name: Pull latest source code
+      ansible.builtin.command:
+        cmd: git pull --ff-only origin "{{ project_branch }}"
+        chdir: "{{ project_dir }}"
+      register: git_pull
+      changed_when: "'Already up to date.' not in git_pull.stdout"
+      environment:
+        GIT_TERMINAL_PROMPT: "0"
+
+    - name: Get deployed Git commit
+      ansible.builtin.command:
+        cmd: git rev-parse HEAD
+        chdir: "{{ project_dir }}"
+      register: new_commit
+      changed_when: false
+
+    - name: Display deployment commit
+      ansible.builtin.debug:
+        msg:
+          - "Previous commit: {{ old_commit.stdout }}"
+          - "Current commit: {{ new_commit.stdout }}"
+          - "{{ git_pull.stdout | default('') }}"
+
+    - name: Validate Docker Compose configuration
+      ansible.builtin.command:
+        cmd: docker compose config --quiet
+        chdir: "{{ project_dir }}"
+      changed_when: false
+
+    - name: Build and start Docker containers
+      ansible.builtin.command:
+        cmd: docker compose up -d --build --remove-orphans
+        chdir: "{{ project_dir }}"
+      register: compose_deploy
+      changed_when: true
+
+    - name: Run Laravel database migrations
+      ansible.builtin.command:
+        cmd: docker compose exec -T backend php artisan migrate --force
+        chdir: "{{ project_dir }}"
+      register: migration_result
+      changed_when: >
+        'Nothing to migrate' not in migration_result.stdout
+      when: run_migrations | bool
+
+    - name: Clear Laravel application caches
+      ansible.builtin.command:
+        cmd: docker compose exec -T backend php artisan optimize:clear
+        chdir: "{{ project_dir }}"
+      changed_when: true
+
+    - name: Wait for frontend port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 3002
+        delay: 2
+        timeout: 120
+
+    - name: Wait for backend port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 8002
+        delay: 2
+        timeout: 120
+
+    - name: Check frontend locally
+      ansible.builtin.uri:
+        url: "{{ frontend_local_url }}"
+        method: GET
+        status_code:
+          - 200
+          - 301
+          - 302
+          - 307
+          - 308
+        timeout: 30
+      register: frontend_health
+      retries: 10
+      delay: 5
+      until: frontend_health.status in [200, 301, 302, 307, 308]
+
+    - name: Check backend locally
+      ansible.builtin.uri:
+        url: "{{ backend_local_url }}"
+        method: GET
+        status_code:
+          - 200
+          - 301
+          - 302
+          - 404
+        timeout: 30
+      register: backend_health
+      retries: 10
+      delay: 5
+      until: backend_health.status in [200, 301, 302, 404]
+
+    - name: Check public HTTPS website
+      ansible.builtin.uri:
+        url: "{{ public_url }}"
+        method: GET
+        status_code:
+          - 200
+          - 301
+          - 302
+          - 307
+          - 308
+        validate_certs: true
+        timeout: 30
+      register: public_health
+      retries: 10
+      delay: 5
+      until: public_health.status in [200, 301, 302, 307, 308]
+
+    - name: Get Docker Compose status
+      ansible.builtin.command:
+        cmd: docker compose ps
+        chdir: "{{ project_dir }}"
+      register: compose_status
+      changed_when: false
+
+    - name: Display Docker Compose status
+      ansible.builtin.debug:
+        var: compose_status.stdout_lines
+
+    - name: Deployment summary
+      ansible.builtin.debug:
+        msg:
+          - "Deployment completed successfully."
+          - "Commit: {{ new_commit.stdout }}"
+          - "Frontend local status: {{ frontend_health.status }}"
+          - "Backend local status: {{ backend_health.status }}"
+          - "Public HTTPS status: {{ public_health.status }}"
+          - "Website: {{ public_url }}"

@@ -1,0 +1,22 @@
+# Ansible temporary and retry files
+*.retry
+.ansible/
+.cache/
+
+# Secrets and private keys
+*.pem
+*.key
+*.pub
+vault-password*
+.env
+.env.*
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Operating system
+.DS_Store
+Thumbs.db
