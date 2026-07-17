@@ -1,0 +1,136 @@
+name: Sync Ansible Control Node
+
+on:
+  push:
+    branches: [main]
+
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: Pull Ansible Code on Control Node
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Configure SSH
+        env:
+          CONTROL_NODE_SSH_KEY: ${{ secrets.CONTROL_NODE_SSH_KEY }}
+          CONTROL_NODE_HOST: ${{ secrets.CONTROL_NODE_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+
+          printf '%s\n' "$CONTROL_NODE_SSH_KEY" > ~/.ssh/control.pem
+
+          chmod 700 ~/.ssh
+          chmod 600 ~/.ssh/control.pem
+
+          ssh-keyscan -H "$CONTROL_NODE_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Update Ansible repository on Control Node
+        env:
+          CONTROL_NODE_HOST: ${{ secrets.CONTROL_NODE_HOST }}
+          CONTROL_NODE_USER: ${{ secrets.CONTROL_NODE_USER }}
+        run: |
+          ssh \
+            -i ~/.ssh/control.pem \
+            -o IdentitiesOnly=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
+            -o TCPKeepAlive=yes \
+            -o ConnectTimeout=30 \
+            "$CONTROL_NODE_USER@$CONTROL_NODE_HOST" '
+              set -e
+
+              REPO_DIR="/home/ubuntu/ansible-jewelry"
+
+              echo "========================================"
+              echo "Synchronizing ansible-jewelry"
+              echo "Time: $(date)"
+              echo "========================================"
+
+              if [ ! -d "$REPO_DIR/.git" ]; then
+                echo "Repository does not exist. Cloning..."
+                git clone \
+                  git@github-ansible-jewelry:chinhtruong107/ansible-jewelry.git \
+                  "$REPO_DIR"
+              fi
+
+              cd "$REPO_DIR"
+
+              echo "Fetching latest code..."
+              git fetch origin main
+
+              echo "Switching to main branch..."
+              git checkout main
+
+              echo "Resetting Control Node repository to origin/main..."
+              git reset --hard origin/main
+
+              chmod +x scripts/deploy.sh 2>/dev/null || true
+
+              echo "Checking repository status..."
+              git status --short
+              git log -1 --oneline
+
+              echo "Checking Ansible inventory..."
+              ansible jewelry_servers --list-hosts
+
+              echo "Checking playbook syntax..."
+              ansible-playbook playbooks/deploy.yml --syntax-check
+
+              echo "Control Node synchronization completed."
+            '
+
+  notify:
+    name: Notify Telegram
+    runs-on: ubuntu-latest
+    needs: [sync]
+    if: always()
+    continue-on-error: true
+
+    steps:
+      - name: Send Telegram notification
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SYNC_RESULT: ${{ needs.sync.result }}
+          REPOSITORY: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          SHORT_SHA=$(echo "$COMMIT_SHA" | cut -c1-7)
+
+          if [ "$SYNC_RESULT" = "success" ]; then
+            STATUS="✅ ANSIBLE CONTROL NODE ĐÃ CẬP NHẬT"
+          else
+            STATUS="❌ CẬP NHẬT CONTROL NODE THẤT BẠI"
+          fi
+
+          MESSAGE="$STATUS
+
+          Repo: $REPOSITORY
+          Branch: $BRANCH
+          Commit: $SHORT_SHA
+          Người thực hiện: $ACTOR
+          Đồng bộ: $SYNC_RESULT
+
+          Log: https://github.com/$REPOSITORY/actions/runs/$RUN_ID"
+
+          RESPONSE=$(curl -s -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${MESSAGE}")
+
+          echo "Telegram response:"
+          echo "$RESPONSE"
+
+          if ! echo "$RESPONSE" | grep -q '"ok":true'; then
+            echo "Telegram send failed"
+            exit 1
+          fi
+
+          echo "Telegram notification sent successfully"
