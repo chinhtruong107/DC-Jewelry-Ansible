@@ -30,12 +30,15 @@
       environment:
         GIT_TERMINAL_PROMPT: "0"
 
-    - name: Pull latest source code
+    - name: Reset source code to latest remote commit
       ansible.builtin.command:
-        cmd: git pull --ff-only origin "{{ project_branch }}"
+        argv:
+          - git
+          - reset
+          - --hard
+          - "origin/{{ project_branch }}"
         chdir: "{{ project_dir }}"
       register: git_pull
-      changed_when: "'Already up to date.' not in git_pull.stdout"
       environment:
         GIT_TERMINAL_PROMPT: "0"
 
