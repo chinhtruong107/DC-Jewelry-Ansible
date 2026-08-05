@@ -1,5 +1,5 @@
 ---
-project_dir: /home/ubuntu/jewelry
+project_dir: /home/ubuntu/dcjewelry
 project_branch: main
 
 frontend_container: trangsuc-frontend
@@ -8,5 +8,12 @@ backend_container: trangsuc-backend
 frontend_local_url: http://127.0.0.1:3002
 backend_local_url: http://127.0.0.1:8002
 public_url: https://dcjewelry.duckdns.org
+
+# Backend is private in the Terraform topology. The frontend must use this
+# address for its server-side API proxy when the application repository is
+# deployed with the production environment values.
+backend_private_ip: REPLACE_BACKEND_PRIVATE_IP
+frontend_service: frontend
+backend_service: backend
 
 run_migrations: true

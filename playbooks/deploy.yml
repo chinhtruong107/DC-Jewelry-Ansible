@@ -1,5 +1,5 @@
 ---
-- name: Deploy Duc Chinh Jewelry
+- name: Deploy Duc Chinh Jewelry services
   hosts: jewelry_servers
   become: false
   gather_facts: false
@@ -15,13 +15,6 @@
         msg: "Project directory {{ project_dir }} does not exist."
       when: not project_directory.stat.exists
 
-    - name: Get current Git commit
-      ansible.builtin.command:
-        cmd: git rev-parse HEAD
-        chdir: "{{ project_dir }}"
-      register: old_commit
-      changed_when: false
-
     - name: Fetch latest source code
       ansible.builtin.command:
         cmd: git fetch origin "{{ project_branch }}"
@@ -30,31 +23,23 @@
       environment:
         GIT_TERMINAL_PROMPT: "0"
 
+    - name: Configure frontend API endpoint for the private Backend EC2
+      ansible.builtin.copy:
+        dest: "{{ project_dir }}/compose.override.yml"
+        mode: "0644"
+        content: |
+          services:
+            frontend:
+              environment:
+                LARAVEL_API_URL: http://{{ backend_private_ip }}:8002/api
+      when: "'frontend' in group_names"
+
     - name: Reset source code to latest remote commit
       ansible.builtin.command:
-        argv:
-          - git
-          - reset
-          - --hard
-          - "origin/{{ project_branch }}"
+        argv: [git, reset, --hard, "origin/{{ project_branch }}"]
         chdir: "{{ project_dir }}"
-      register: git_pull
       environment:
         GIT_TERMINAL_PROMPT: "0"
-
-    - name: Get deployed Git commit
-      ansible.builtin.command:
-        cmd: git rev-parse HEAD
-        chdir: "{{ project_dir }}"
-      register: new_commit
-      changed_when: false
-
-    - name: Display deployment commit
-      ansible.builtin.debug:
-        msg:
-          - "Previous commit: {{ old_commit.stdout }}"
-          - "Current commit: {{ new_commit.stdout }}"
-          - "{{ git_pull.stdout | default('') }}"
 
     - name: Validate Docker Compose configuration
       ansible.builtin.command:
@@ -62,27 +47,31 @@
         chdir: "{{ project_dir }}"
       changed_when: false
 
-    - name: Build and start Docker containers
+    - name: Build and start backend on the private Backend EC2
       ansible.builtin.command:
-        cmd: docker compose up -d --build --remove-orphans
+        cmd: docker compose up -d --build --remove-orphans {{ backend_service }}
         chdir: "{{ project_dir }}"
-      register: compose_deploy
-      changed_when: true
+      when: "'backend' in group_names"
 
-    - name: Run Laravel database migrations
+    - name: Run Laravel migrations on the Backend EC2
       ansible.builtin.command:
-        cmd: docker compose exec -T backend php artisan migrate --force
+        cmd: docker compose exec -T {{ backend_service }} php artisan migrate --force
         chdir: "{{ project_dir }}"
-      register: migration_result
-      changed_when: >
-        'Nothing to migrate' not in migration_result.stdout
-      when: run_migrations | bool
+      when:
+        - run_migrations | bool
+        - "'backend' in group_names"
 
-    - name: Clear Laravel application caches
+    - name: Clear Laravel caches on the Backend EC2
       ansible.builtin.command:
-        cmd: docker compose exec -T backend php artisan optimize:clear
+        cmd: docker compose exec -T {{ backend_service }} php artisan optimize:clear
         chdir: "{{ project_dir }}"
-      changed_when: true
+      when: "'backend' in group_names"
+
+    - name: Build and start frontend on the public Frontend EC2
+      ansible.builtin.command:
+        cmd: docker compose up -d --build --remove-orphans --no-deps {{ frontend_service }}
+        chdir: "{{ project_dir }}"
+      when: "'frontend' in group_names"
 
     - name: Wait for frontend port
       ansible.builtin.wait_for:
@@ -90,6 +79,18 @@
         port: 3002
         delay: 2
         timeout: 120
+      when: "'frontend' in group_names"
+
+    - name: Check frontend locally
+      ansible.builtin.uri:
+        url: "{{ frontend_local_url }}"
+        status_code: [200, 301, 302, 307, 308]
+        timeout: 30
+      register: frontend_health
+      retries: 10
+      delay: 5
+      until: frontend_health.status in [200, 301, 302, 307, 308]
+      when: "'frontend' in group_names"
 
     - name: Wait for backend port
       ansible.builtin.wait_for:
@@ -97,54 +98,31 @@
         port: 8002
         delay: 2
         timeout: 120
-
-    - name: Check frontend locally
-      ansible.builtin.uri:
-        url: "{{ frontend_local_url }}"
-        method: GET
-        status_code:
-          - 200
-          - 301
-          - 302
-          - 307
-          - 308
-        timeout: 30
-      register: frontend_health
-      retries: 10
-      delay: 5
-      until: frontend_health.status in [200, 301, 302, 307, 308]
+      when: "'backend' in group_names"
 
     - name: Check backend locally
       ansible.builtin.uri:
         url: "{{ backend_local_url }}"
-        method: GET
-        status_code:
-          - 200
-          - 301
-          - 302
-          - 404
+        status_code: [200, 301, 302, 404]
         timeout: 30
       register: backend_health
       retries: 10
       delay: 5
       until: backend_health.status in [200, 301, 302, 404]
+      when: "'backend' in group_names"
 
-    - name: Check public HTTPS website
+    - name: Check public HTTPS website from the Control Node
       ansible.builtin.uri:
         url: "{{ public_url }}"
-        method: GET
-        status_code:
-          - 200
-          - 301
-          - 302
-          - 307
-          - 308
+        status_code: [200, 301, 302, 307, 308]
         validate_certs: true
         timeout: 30
       register: public_health
       retries: 10
       delay: 5
       until: public_health.status in [200, 301, 302, 307, 308]
+      delegate_to: localhost
+      run_once: true
 
     - name: Get Docker Compose status
       ansible.builtin.command:
@@ -156,13 +134,3 @@
     - name: Display Docker Compose status
       ansible.builtin.debug:
         var: compose_status.stdout_lines
-
-    - name: Deployment summary
-      ansible.builtin.debug:
-        msg:
-          - "Deployment completed successfully."
-          - "Commit: {{ new_commit.stdout }}"
-          - "Frontend local status: {{ frontend_health.status }}"
-          - "Backend local status: {{ backend_health.status }}"
-          - "Public HTTPS status: {{ public_health.status }}"
-          - "Website: {{ public_url }}"
