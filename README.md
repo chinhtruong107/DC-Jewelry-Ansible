@@ -50,5 +50,5 @@ populating the inventory.
 Run on the Control Node:
 
 ```bash
-cd /home/ubuntu/ansible-jewelry
+cd /home/ubuntu/dc-jewelry-ansible
 ./scripts/deploy.sh

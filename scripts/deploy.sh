@@ -2,7 +2,7 @@
 
 set -Eeuo pipefail
 
-ANSIBLE_REPO_DIR="/home/ubuntu/ansible-jewelry"
+ANSIBLE_REPO_DIR="/home/ubuntu/dc-jewelry-ansible"
 ANSIBLE_BRANCH="main"
 PLAYBOOK_FILE="playbooks/deploy.yml"
 

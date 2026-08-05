@@ -43,17 +43,17 @@ jobs:
             "$CONTROL_NODE_USER@$CONTROL_NODE_HOST" '
               set -e
 
-              REPO_DIR="/home/ubuntu/ansible-jewelry"
+              REPO_DIR="/home/ubuntu/dc-jewelry-ansible"
 
               echo "========================================"
-              echo "Synchronizing ansible-jewelry"
+                echo "Synchronizing dc-jewelry-ansible"
               echo "Time: $(date)"
               echo "========================================"
 
               if [ ! -d "$REPO_DIR/.git" ]; then
                 echo "Repository does not exist. Cloning..."
                 git clone \
-                  git@github-ansible-jewelry:chinhtruong107/ansible-jewelry.git \
+                  git@github.com:chinhtruong107/DC-Jewelry-Ansible.git \
                   "$REPO_DIR"
               fi
 
