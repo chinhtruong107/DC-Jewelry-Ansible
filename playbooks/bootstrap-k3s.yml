@@ -157,7 +157,7 @@
         flat: true
 
     - name: Point the downloaded kubeconfig at the private K3s API
-      ansible.builtin.replace:
+      ansible.builtin.lineinfile:
         path: "{{ control_node_kubeconfig_path }}"
         regexp: 'https://127\.0\.0\.1:6443'
         line: "    server: https://{{ k3s_server_private_ip }}:{{ k3s_api_port }}"
