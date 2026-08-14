@@ -1,0 +1,191 @@
+---
+- name: Validate the Terraform-derived K3s inventory
+  hosts: control_node
+  gather_facts: false
+  tasks:
+    - name: Reject placeholder private IPs before changing any host
+      ansible.builtin.assert:
+        that:
+          - k3s_server_private_ip is match('^((25[0-5]|2[0-4][0-9]|1?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9][0-9]?)$')
+          - groups['k3s_server'] | length == 1
+          - groups['k3s_workers'] | length > 0
+          - groups['k3s_server'] | map('extract', hostvars, 'ansible_host') | list | first == k3s_server_private_ip
+          - groups['k3s_workers'] | map('extract', hostvars, 'ansible_host') | select('match', '^((25[0-5]|2[0-4][0-9]|1?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9][0-9]?)$') | list | length == groups['k3s_workers'] | length
+        fail_msg: >-
+          Populate inventory/production.ini and k3s_server_private_ip with the
+          private IPs from the Terraform deployment before running this playbook.
+
+- name: Install kubectl and Helm on the Control Node
+  hosts: control_node
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Install prerequisites
+      ansible.builtin.apt:
+        name: [ca-certificates, curl]
+        state: present
+        update_cache: true
+
+    - name: Create the kubeconfig directory
+      ansible.builtin.file:
+        path: "{{ control_node_kubeconfig_path | dirname }}"
+        state: directory
+        owner: "{{ control_node_user }}"
+        group: "{{ control_node_user }}"
+        mode: '0700'
+
+    - name: Install the pinned kubectl binary
+      ansible.builtin.get_url:
+        url: "https://dl.k8s.io/release/{{ kubectl_version }}/bin/linux/{{ tool_architecture }}/kubectl"
+        dest: /usr/local/bin/kubectl
+        mode: '0755'
+
+    - name: Download the pinned Helm archive
+      ansible.builtin.get_url:
+        url: "https://get.helm.sh/helm-{{ helm_version }}-linux-{{ tool_architecture }}.tar.gz"
+        dest: "/tmp/helm-{{ helm_version }}-linux-{{ tool_architecture }}.tar.gz"
+        mode: '0644'
+
+    - name: Create a versioned Helm extraction directory
+      ansible.builtin.file:
+        path: "/tmp/helm-{{ helm_version }}"
+        state: directory
+        mode: '0755'
+
+    - name: Install the pinned Helm binary
+      ansible.builtin.unarchive:
+        src: "/tmp/helm-{{ helm_version }}-linux-{{ tool_architecture }}.tar.gz"
+        dest: "/tmp/helm-{{ helm_version }}"
+        remote_src: true
+        extra_opts: [--strip-components=1]
+        creates: "/tmp/helm-{{ helm_version }}/helm"
+
+    - name: Put Helm on the Control Node PATH
+      ansible.builtin.copy:
+        src: "/tmp/helm-{{ helm_version }}/helm"
+        dest: /usr/local/bin/helm
+        remote_src: true
+        mode: '0755'
+
+- name: Install and start the K3s server
+  hosts: k3s_server
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Install server prerequisites
+      ansible.builtin.apt:
+        name: [ca-certificates, curl]
+        state: present
+        update_cache: true
+
+    - name: Install K3s server
+      ansible.builtin.shell: curl -sfL https://get.k3s.io | sh -
+      args:
+        creates: /usr/local/bin/k3s
+        executable: /bin/bash
+      environment:
+        INSTALL_K3S_VERSION: "{{ k3s_version | default(omit, true) }}"
+        INSTALL_K3S_EXEC: >-
+          server --node-ip {{ ansible_host }} --advertise-address {{ ansible_host }}
+          --tls-san {{ k3s_server_private_ip }}
+
+    - name: Ensure K3s server is running
+      ansible.builtin.systemd_service:
+        name: k3s
+        state: started
+        enabled: true
+
+    - name: Wait for the Kubernetes API to become ready
+      ansible.builtin.command: k3s kubectl get --raw=/readyz
+      register: k3s_ready
+      changed_when: false
+      retries: 30
+      delay: 4
+      until: k3s_ready.stdout == 'ok'
+
+    - name: Read the server node token without logging it
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: k3s_node_token_file
+      no_log: true
+
+    - name: Keep the token only in this Ansible run
+      ansible.builtin.set_fact:
+        k3s_node_token: "{{ k3s_node_token_file.content | b64decode | trim }}"
+      no_log: true
+
+- name: Install and join private K3s workers
+  hosts: k3s_workers
+  become: true
+  gather_facts: true
+  vars:
+    k3s_join_token: "{{ hostvars[groups['k3s_server'][0]].k3s_node_token }}"
+  tasks:
+    - name: Install agent prerequisites
+      ansible.builtin.apt:
+        name: [ca-certificates, curl]
+        state: present
+        update_cache: true
+
+    - name: Install K3s agent and join the private API endpoint
+      ansible.builtin.shell: curl -sfL https://get.k3s.io | sh -
+      args:
+        creates: /usr/local/bin/k3s
+        executable: /bin/bash
+      environment:
+        INSTALL_K3S_VERSION: "{{ k3s_version | default(omit, true) }}"
+        K3S_URL: "https://{{ k3s_server_private_ip }}:{{ k3s_api_port }}"
+        K3S_TOKEN: "{{ k3s_join_token }}"
+        INSTALL_K3S_EXEC: "agent --node-ip {{ ansible_host }}"
+      no_log: true
+
+    - name: Ensure K3s agent is running
+      ansible.builtin.systemd_service:
+        name: k3s-agent
+        state: started
+        enabled: true
+
+- name: Download and validate kubeconfig on the Control Node
+  hosts: k3s_server
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Fetch kubeconfig to the Control Node
+      ansible.builtin.fetch:
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: "{{ control_node_kubeconfig_path }}"
+        flat: true
+
+    - name: Point the downloaded kubeconfig at the private K3s API
+      ansible.builtin.replace:
+        path: "{{ control_node_kubeconfig_path }}"
+        regexp: 'https://127\\.0\\.0\\.1:6443'
+        replace: "https://{{ k3s_server_private_ip }}:{{ k3s_api_port }}"
+      delegate_to: control-node
+      become: true
+
+    - name: Restrict kubeconfig permissions on the Control Node
+      ansible.builtin.file:
+        path: "{{ control_node_kubeconfig_path }}"
+        owner: "{{ control_node_user }}"
+        group: "{{ control_node_user }}"
+        mode: '0600'
+      delegate_to: control-node
+      become: true
+
+    - name: Verify all K3s nodes through the downloaded kubeconfig
+      ansible.builtin.command: "kubectl --kubeconfig {{ control_node_kubeconfig_path }} wait --for=condition=Ready nodes --all --timeout=180s"
+      changed_when: false
+      delegate_to: control-node
+      become: true
+
+    - name: List Ready K3s nodes through the downloaded kubeconfig
+      ansible.builtin.command: "kubectl --kubeconfig {{ control_node_kubeconfig_path }} get nodes"
+      register: k3s_nodes
+      changed_when: false
+      delegate_to: control-node
+      become: true
+
+    - name: Display joined nodes
+      ansible.builtin.debug:
+        var: k3s_nodes.stdout_lines

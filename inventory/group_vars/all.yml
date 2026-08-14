@@ -1,19 +1,16 @@
 ---
-project_dir: /home/ubuntu/dcjewelry
-project_branch: main
+# Pin this to a tested K3s release before production use.
+k3s_version: "v1.33.5+k3s1"
 
-frontend_container: trangsuc-frontend
-backend_container: trangsuc-backend
+# Terraform topology: K3s Server is public; agents stay in private subnet 1.
+# Both server and workers use VPC private addresses for cluster traffic.
+k3s_server_private_ip: REPLACE_K3S_SERVER_PRIVATE_IP
+k3s_api_port: 6443
 
-frontend_local_url: http://127.0.0.1:3002
-backend_local_url: http://127.0.0.1:8002
-public_url: https://dcjewelry.duckdns.org
+control_node_user: ubuntu
+control_node_kubeconfig_path: "/home/{{ control_node_user }}/.kube/config"
 
-# Backend is private in the Terraform topology. The frontend must use this
-# address for its server-side API proxy when the application repository is
-# deployed with the production environment values.
-backend_private_ip: REPLACE_BACKEND_PRIVATE_IP
-frontend_service: frontend
-backend_service: backend
-
-run_migrations: true
+# Binaries installed on the Control Node for operating the cluster.
+kubectl_version: "v1.33.5"
+helm_version: "v3.17.3"
+tool_architecture: amd64

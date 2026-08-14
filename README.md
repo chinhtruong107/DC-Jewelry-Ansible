@@ -1,54 +1,70 @@
-# Ansible Jewelry Deployment
+# DC Jewelry K3s Bootstrap
 
-Ansible project for automatically deploying the Duc Chinh Jewelry website.
+This repository runs **on the Terraform-created Control Node**. It bootstraps
+the K3s cluster; it does not deploy the DC Jewelry application or run Docker
+Compose.
 
-## Architecture
+## What it does
 
-GitHub Actions connects to the Ansible Control Node.
+1. Installs `kubectl` and Helm on the Control Node.
+2. Installs one K3s server on **K3s Server** in public subnet 1.
+3. Reads `/var/lib/rancher/k3s/server/node-token` only in memory.
+4. Installs K3s agents and joins every private worker in private subnet 1.
+5. Fetches `/etc/rancher/k3s/k3s.yaml` to the Control Node at
+   `/home/ubuntu/.kube/config`, rewrites its API endpoint to the K3s Server
+   private IP, and verifies `kubectl get nodes`.
 
-The Control Node runs this Ansible project and deploys the application to the
-separate Frontend and Backend EC2 instances created by `DCJewelry-Terraform`.
-The Backend is private and connects to the private MySQL RDS instance. The
-Frontend is public and proxies server-side API calls to the Backend private IP.
+The token is marked `no_log` and is never written to inventory, group vars, or
+Git. K3s keeps its server-side kubeconfig protected; the downloaded Control
+Node copy is restricted to mode `0600`.
 
-## Deployment flow
+## Terraform contract
 
-1. Code is pushed to the `main` branch of the Jewelry repository.
-2. GitHub Actions runs the CI workflow.
-3. After CI succeeds, GitHub Actions connects to the Control Node.
-4. The Control Node updates this Ansible repository.
-5. Ansible connects from the Control Node to Frontend and Backend over SSH.
-6. Each target pulls the latest application source code.
-7. Backend Compose starts only `backend`; Frontend Compose starts only `frontend`.
-8. Laravel migrations run on Backend against private RDS.
-9. Local and public health checks are performed.
+Populate `inventory/production.ini` and `inventory/group_vars/all.yml` from
+the Terraform outputs after `terraform apply`:
 
-## Target server
+| Ansible value | Terraform value needed |
+| --- | --- |
+| `k3s_server_private_ip` | Private IP of K3s Server in public subnet 1 (`10.0.1.0/24`) |
+| `k3s_server` host | The same K3s Server private IP |
+| each `k3s_workers` host | Private IP of each worker in private subnet 1 (`10.0.10.0/24`) |
+| SSH key | Terraform-created private key, copied to `/home/ubuntu/.ssh/dcjewelry-k3s.pem` on Control Node |
 
-- Project directory: `/home/ubuntu/dcjewelry`
-- Frontend port: `3002`
-- Backend port: `8002`
-- Public URL: `https://dcjewelry.duckdns.org`
+Terraform security groups must allow:
 
-## Terraform alignment
+- Control Node -> K3s Server: TCP `22`, `6443`.
+- Control Node -> private workers: TCP `22`.
+- K3s Server <-> private workers: TCP `6443`, `10250`, UDP `8472`.
 
-Terraform creates three EC2 instances: Frontend in a public subnet, Backend
-in `private_subnet_2`, and the Control Node in a public subnet. Run Ansible
-from the Control Node and replace the two placeholders in
-`inventory/production.ini` with the Frontend and Backend private IPs. The SSH
-private key is Terraform's `keypair/key` (matching `keypair/key.pub`). Copy it
-to `/home/ubuntu/.ssh/key` on the Control Node and run
-`chmod 600 /home/ubuntu/.ssh/key`.
+Do not open Kubernetes API port `6443` to the Internet. The K3s server is in a
+public subnet for Traefik/public ingress; cluster control traffic stays on VPC
+private IPs.
 
-The current Terraform outputs expose the Frontend public/private IP and the
-Control Node public IP, but not the Backend private IP. Add a Backend private
-IP output to Terraform or obtain it from the EC2/Terraform state before
-populating the inventory.
+## Prerequisites on Control Node
 
-## Manual deployment
+- Ubuntu with Ansible installed.
+- This repository cloned at `/home/ubuntu/dc-jewelry-ansible`.
+- The Terraform SSH private key copied to
+  `/home/ubuntu/.ssh/dcjewelry-k3s.pem` with `chmod 600`.
+- Valid private addresses replacing all `REPLACE_*` values.
+- Private workers have NAT egress (or an approved mirror) to download K3s.
 
-Run on the Control Node:
+## Bootstrap
 
 ```bash
 cd /home/ubuntu/dc-jewelry-ansible
-./scripts/deploy.sh
+chmod +x scripts/bootstrap-k3s.sh
+./scripts/bootstrap-k3s.sh
+```
+
+After completion, use the cluster from the Control Node:
+
+```bash
+export KUBECONFIG=/home/ubuntu/.kube/config
+kubectl get nodes -o wide
+helm version
+```
+
+To add a worker, add its private IP under `[k3s_workers]` and rerun the script.
+Existing nodes are left in place; changing the K3s version, server address, or
+K3s server flags requires an explicit upgrade plan.
