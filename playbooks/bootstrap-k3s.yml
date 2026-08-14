@@ -160,7 +160,7 @@
       ansible.builtin.replace:
         path: "{{ control_node_kubeconfig_path }}"
         regexp: 'https://127\.0\.0\.1:6443'
-        replace: "https://{{ k3s_server_private_ip }}:{{ k3s_api_port }}"
+        line: "    server: https://{{ k3s_server_private_ip }}:{{ k3s_api_port }}"
       delegate_to: control-node
       become: true
 
