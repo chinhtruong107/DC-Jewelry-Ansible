@@ -10,6 +10,11 @@ k3s_api_port: 6443
 control_node_user: ubuntu
 control_node_kubeconfig_path: "/home/{{ control_node_user }}/.kube/config"
 
+# Public manifest repository used by GitHub Actions CD on the Control Node.
+platform_repository_url: "https://github.com/chinhtruong107/DC-Jewelry-K3s-Platform.git"
+platform_repository_version: main
+platform_checkout_path: "/home/{{ control_node_user }}/dc-jewelry-k3s-platform"
+
 # Binaries installed on the Control Node for operating the cluster.
 kubectl_version: "v1.33.5"
 helm_version: "v3.17.3"

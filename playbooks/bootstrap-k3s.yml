@@ -22,7 +22,7 @@
   tasks:
     - name: Install prerequisites
       ansible.builtin.apt:
-        name: [ca-certificates, curl]
+        name: [ca-certificates, curl, git]
         state: present
         update_cache: true
 
@@ -33,6 +33,23 @@
         owner: "{{ control_node_user }}"
         group: "{{ control_node_user }}"
         mode: '0700'
+
+    - name: Ensure the Platform checkout directory belongs to the Control Node user
+      ansible.builtin.file:
+        path: "{{ platform_checkout_path }}"
+        state: directory
+        owner: "{{ control_node_user }}"
+        group: "{{ control_node_user }}"
+        mode: '0755'
+        recurse: true
+
+    - name: Clone or update the public K3s Platform repository for CD
+      ansible.builtin.git:
+        repo: "{{ platform_repository_url }}"
+        dest: "{{ platform_checkout_path }}"
+        version: "{{ platform_repository_version }}"
+        update: true
+      become_user: "{{ control_node_user }}"
 
     - name: Install the pinned kubectl binary
       ansible.builtin.get_url:
@@ -178,6 +195,7 @@
       changed_when: false
       delegate_to: control-node
       become: true
+      become_user: "{{ control_node_user }}"
 
     - name: List Ready K3s nodes through the downloaded kubeconfig
       ansible.builtin.command: "kubectl --kubeconfig {{ control_node_kubeconfig_path }} get nodes"
@@ -185,6 +203,7 @@
       changed_when: false
       delegate_to: control-node
       become: true
+      become_user: "{{ control_node_user }}"
 
     - name: Display joined nodes
       ansible.builtin.debug:

@@ -6,17 +6,32 @@ Compose.
 
 ## What it does
 
-1. Installs `kubectl` and Helm on the Control Node.
-2. Installs one K3s server on **K3s Server** in public subnet 1.
-3. Reads `/var/lib/rancher/k3s/server/node-token` only in memory.
-4. Installs K3s agents and joins every private worker in private subnet 1.
-5. Fetches `/etc/rancher/k3s/k3s.yaml` to the Control Node at
+1. Installs `git`, `kubectl`, and Helm on the Control Node.
+2. Clones or updates the public `DC-Jewelry-K3s-Platform` checkout at
+   `/home/ubuntu/dc-jewelry-k3s-platform` for GitHub Actions CD.
+3. Installs one K3s server on **K3s Server** in public subnet 1.
+4. Reads `/var/lib/rancher/k3s/server/node-token` only in memory.
+5. Installs K3s agents and joins every private worker in private subnet 1.
+6. Fetches `/etc/rancher/k3s/k3s.yaml` to the Control Node at
    `/home/ubuntu/.kube/config`, rewrites its API endpoint to the K3s Server
-   private IP, and verifies `kubectl get nodes`.
+   private IP, and verifies `kubectl get nodes` as user `ubuntu`.
 
 The token is marked `no_log` and is never written to inventory, group vars, or
 Git. K3s keeps its server-side kubeconfig protected; the downloaded Control
 Node copy is restricted to mode `0600`.
+
+## Continuous delivery
+
+After bootstrap, the Control Node has a working copy of the public Platform
+repository at `/home/ubuntu/dc-jewelry-k3s-platform`. GitHub Actions in the
+`DCJewelry` application repository can SSH to the Control Node and run its
+K3s deployment script from that checkout. The checkout and kubeconfig are
+owned by `ubuntu`, so the CD command can run `kubectl` with
+`/home/ubuntu/.kube/config` without root.
+
+This repository does not deploy Docker Compose. Do not commit the kubeconfig,
+SSH private keys, K3s tokens, or database secrets; provide those only through
+the appropriate host or GitHub secret mechanism.
 
 ## Terraform contract
 
@@ -44,6 +59,9 @@ private IPs.
 
 - Ubuntu with Ansible installed.
 - This repository cloned at `/home/ubuntu/dc-jewelry-ansible`.
+- The Platform checkout is managed by this playbook at
+  `/home/ubuntu/dc-jewelry-k3s-platform`; GitHub Actions CD uses this local
+  checkout after SSHing to the Control Node.
 - The Terraform SSH private key copied to
   `/home/ubuntu/.ssh/dcjewelry-k3s.pem` with `chmod 600`.
 - Valid private addresses replacing all `REPLACE_*` values.

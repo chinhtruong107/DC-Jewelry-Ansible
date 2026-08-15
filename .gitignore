@@ -11,6 +11,11 @@ vault-password*
 .env
 .env.*
 
+# Local Kubernetes credentials and runtime-only tokens
+.kube/
+kubeconfig
+k3s-token
+
 # Editor files
 .vscode/
 .idea/
