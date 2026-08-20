@@ -11,7 +11,8 @@ Compose.
    `/home/ubuntu/dc-jewelry-k3s-platform` for GitHub Actions CD.
 3. Installs one K3s server on **K3s Server** in public subnet 1.
 4. Reads `/var/lib/rancher/k3s/server/node-token` only in memory.
-5. Installs K3s agents and joins every private worker in private subnet 1.
+5. Installs K3s agents and joins every private worker listed in the inventory.
+   The default inventory includes two workers in private subnet 1.
 6. Fetches `/etc/rancher/k3s/k3s.yaml` to the Control Node at
    `/home/ubuntu/.kube/config`, rewrites its API endpoint to the K3s Server
    private IP, and verifies `kubectl get nodes` as user `ubuntu`.
@@ -42,7 +43,7 @@ the Terraform outputs after `terraform apply`:
 | --- | --- |
 | `k3s_server_private_ip` | Private IP of K3s Server in public subnet 1 (`10.0.1.0/24`) |
 | `k3s_server` host | The same K3s Server private IP |
-| each `k3s_workers` host | Private IP of each worker in private subnet 1 (`10.0.10.0/24`) |
+| `k3s-worker-1` and `k3s-worker-2` hosts | Private IPs of the two workers in private subnet 1 (`10.0.10.0/24`) |
 | SSH key | Terraform-created private key, copied to `/home/ubuntu/.ssh/dcjewelry-k3s.pem` on Control Node |
 
 Terraform security groups must allow:
@@ -64,7 +65,8 @@ private IPs.
   checkout after SSHing to the Control Node.
 - The Terraform SSH private key copied to
   `/home/ubuntu/.ssh/dcjewelry-k3s.pem` with `chmod 600`.
-- Valid private addresses replacing all `REPLACE_*` values.
+- Valid private addresses replacing all `REPLACE_*` values, including both
+  worker entries by default.
 - Private workers have NAT egress (or an approved mirror) to download K3s.
 
 ## Bootstrap
@@ -83,6 +85,8 @@ kubectl get nodes -o wide
 helm version
 ```
 
-To add a worker, add its private IP under `[k3s_workers]` and rerun the script.
+The default inventory contains `k3s-worker-1` and `k3s-worker-2`. Replace both
+placeholders with Terraform private IPs before running the script. To add more
+workers, add their private IPs under `[k3s_workers]` and rerun the script.
 Existing nodes are left in place; changing the K3s version, server address, or
 K3s server flags requires an explicit upgrade plan.
